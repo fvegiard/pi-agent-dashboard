@@ -65,7 +65,14 @@ import {
  */
 export interface SafeArgv {
   argv: string[];
-  spawnOptions: { shell: false; windowsHide: true };
+  spawnOptions: { shell: false; windowsHide: true; windowsVerbatimArguments?: true };
+}
+
+/** MSVCRT-style quoting for one token of a verbatim cmd.exe line. */
+function quoteCmdArg(arg: string): string {
+  if (arg !== "" && !/[\s"&|<>^()]/.test(arg)) return arg;
+  const escaped = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1");
+  return `"${escaped}"`;
 }
 
 export function buildSafeArgv(
@@ -90,6 +97,17 @@ export function buildSafeArgv(
     const isShim = /\.(cmd|bat)$/i.test(cmd);
     const hasExtension = /\.[A-Za-z0-9]+$/.test(cmd);
     if (isShim || !hasExtension) {
+      // A command path needing quotes (e.g. `C:\Program Files\nodejs\npm.cmd`)
+      // breaks under `/s`: cmd strips the first and last quote of the line,
+      // mangling Node's per-arg quoting into `C:\Program`. Build the whole
+      // line ourselves, wrapped in an outer quote pair for /s to strip.
+      if (/[\s"]/.test(cmd)) {
+        const line = [cmd, ...args].map(quoteCmdArg).join(" ");
+        return {
+          argv: ["cmd.exe", "/d", "/s", "/c", `"${line}"`],
+          spawnOptions: { shell: false, windowsHide: true, windowsVerbatimArguments: true },
+        };
+      }
       return {
         argv: ["cmd.exe", "/d", "/s", "/c", cmd, ...args],
         spawnOptions: { shell: false, windowsHide: true },

@@ -9,7 +9,11 @@
  * See change: platform-command-executor.
  */
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  buildSafeArgv,
   exec,
   execAsync as execAsyncFn,
   execFile,
@@ -130,5 +134,38 @@ describe("execFileAsync / execAsync shape", () => {
   it("execAsync resolves { stdout, stderr }", async () => {
     const r = await execAsyncFn(`"${process.execPath}" -e "process.stdout.write('x')"`);
     expect(r).toMatchObject({ stdout: "x" });
+  });
+});
+
+describe("buildSafeArgv — .cmd path containing spaces (Program Files)", () => {
+  const npmCmd = "C:\\Program Files\\nodejs\\npm.cmd";
+
+  it("emits a single verbatim /s /c line with the shim path quoted", () => {
+    const { argv, spawnOptions } = buildSafeArgv(npmCmd, ["list", "-g", "a b"], "win32");
+    expect(argv.slice(0, 4)).toEqual(["cmd.exe", "/d", "/s", "/c"]);
+    expect(argv).toHaveLength(5);
+    // /s strips the OUTER quote pair, leaving `"C:\Program Files\nodejs\npm.cmd" list -g "a b"`.
+    expect(argv[4]).toBe('""C:\\Program Files\\nodejs\\npm.cmd" list -g "a b""');
+    expect(spawnOptions).toMatchObject({ shell: false, windowsHide: true, windowsVerbatimArguments: true });
+  });
+
+  it("leaves space-free shims on the unchanged argv form", () => {
+    const { argv, spawnOptions } = buildSafeArgv("npm", ["root", "-g"], "win32");
+    expect(argv).toEqual(["cmd.exe", "/d", "/s", "/c", "npm", "root", "-g"]);
+    expect(spawnOptions).not.toHaveProperty("windowsVerbatimArguments");
+  });
+
+  it.skipIf(process.platform !== "win32")("really runs a .cmd under a directory with spaces", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi safe argv "));
+    try {
+      const shim = join(dir, "echo args.cmd");
+      writeFileSync(shim, "@echo off\r\necho [%1][%2]\r\n");
+      const { argv, spawnOptions } = buildSafeArgv(shim, ["one", "two words"]);
+      const r = spawnSync(argv[0], argv.slice(1), { encoding: "utf-8", ...spawnOptions });
+      expect(String(r.stderr)).toBe("");
+      expect(String(r.stdout).trim()).toBe('[one]["two words"]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

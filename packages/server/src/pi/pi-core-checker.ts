@@ -16,15 +16,12 @@
  * Version fetch reuses `fetchPackageMeta()` from the npm-search proxy.
  * Results are cached for 5 minutes.
  */
-import { execFile } from "node:child_process"; // ban:child_process-ok pi-core check uses execFile + promisify for `npm list -g --json` output capture; refactoring to platform/spawn's Recipe engine is tracked tech debt
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
+import { buildSafeArgv, execFileAsync } from "@blackbelt-technology/pi-dashboard-shared/platform/exec.js";
 import { invalidateChangelogCache } from "../changelog/changelog-parser.js";
 import { fetchPackageMeta } from "../package/npm-search-proxy.js";
-
-const execFileAsync = promisify(execFile);
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const NPM_LIST_TIMEOUT_MS = 30_000;
@@ -92,9 +89,11 @@ export interface PiCoreCheckerOptions {
 	managedDir?: string;
 }
 
-/** Default npm runner uses execFile for safety. */
+/** Default npm runner: buildSafeArgv routes npm through cmd.exe on Windows (bare execFile ENOENTs). */
 const defaultNpmList: NpmListRunner = async () => {
-	const { stdout } = await execFileAsync("npm", ["list", "-g", "--depth=0", "--json"], {
+	const { argv, spawnOptions } = buildSafeArgv("npm", ["list", "-g", "--depth=0", "--json"]);
+	const { stdout } = await execFileAsync(argv[0], argv.slice(1), {
+		...spawnOptions,
 		timeout: NPM_LIST_TIMEOUT_MS,
 		maxBuffer: 10 * 1024 * 1024,
 	});
@@ -282,6 +281,7 @@ export class PiCoreChecker {
 }
 
 export const _internal = {
+	defaultNpmList,
 	looksLikePiEcosystem,
 	resolveDisplayName,
 	DISPLAY_NAMES,
