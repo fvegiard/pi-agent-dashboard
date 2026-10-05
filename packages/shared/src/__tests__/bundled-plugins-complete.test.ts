@@ -126,6 +126,11 @@ describe("piDashboard.bundledPlugins completeness", () => {
     expect(bundled).toContain("kb-plugin");
   });
 
+  it("installs Gmail's production dependencies from its workspace manifest", () => {
+    expect(readPkg("gmail-plugin").dependencies).toHaveProperty("oauth4webapi");
+    expect(readBundledWorkspacePkgs()).toContain("gmail-plugin");
+  });
+
   it("excludes fixture-only plugins (e.g. demo-plugin)", () => {
     expect(bundled).not.toContain("demo-plugin");
   });

@@ -79,10 +79,10 @@ export function selectClientRegistryPlugins<T extends ClientRegistryCandidate>(
 }
 
 /**
- * Bundle-eligible roots for a build rooted at `repoRoot` — the monorepo
- * `packages/` directory, which is the only root the vite plugin discovers
- * from (`discoverPlugins(repoRoot)`). See design D0.
+ * Bundle-eligible roots: workspace sources and their Electron materialization.
+ * The synthetic bundle workspace marker makes `repoRoot` the server bundle,
+ * whose plugins live under resources/plugins rather than packages/.
  */
 export function bundleRootsFor(repoRoot: string): string[] {
-  return [path.join(repoRoot, "packages")];
+  return [path.join(repoRoot, "packages"), path.join(repoRoot, "resources", "plugins")];
 }

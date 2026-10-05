@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { DiscoveredPlugin } from "../loader.js";
 import { pluginRegistryHash } from "../loader.js";
-import { selectClientRegistryPlugins } from "../client-registry-set.js";
+import { bundleRootsFor, selectClientRegistryPlugins } from "../client-registry-set.js";
 
 const BUNDLE_ROOT = "/repo/packages";
 const BUNDLE_ROOTS = [BUNDLE_ROOT];
@@ -32,6 +32,21 @@ function plugin(
 }
 
 describe("selectClientRegistryPlugins (E1–E3)", () => {
+  it("keeps Electron bundled plugins in the same hash as their workspace sources", () => {
+    const source = [plugin("gmail"), plugin("kb")];
+    const installed = [
+      plugin("gmail", { dir: "/bundle/resources/plugins/gmail-plugin" }),
+      plugin("kb", { dir: "/bundle/resources/plugins/kb-plugin" }),
+      plugin("user-plugin", { dir: "/home/u/.pi/dashboard/plugins/user-plugin" }),
+    ];
+    const selected = selectClientRegistryPlugins(installed, {
+      isProd: true,
+      bundleRoots: bundleRootsFor("/bundle"),
+    });
+    expect(selected.map((p) => p.manifest.id)).toEqual(["gmail", "kb"]);
+    expect(pluginRegistryHash(selected)).toBe(pluginRegistryHash(source));
+  });
+
   it("E1 drops client-less plugins and the hash matches the client-bearing subset", () => {
     const withClientA = plugin("alpha");
     const withClientB = plugin("beta");

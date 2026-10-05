@@ -116,6 +116,7 @@ const BUNDLED_WORKSPACE_PKGS = [
   "extension",
   "dashboard-plugin-runtime",
   "mcp-client-plugin",
+  "gmail-plugin", // oauth4webapi needed by the bundled Gmail server entry
   "bus-client", // extension
   "client-utils", // automation / flows / keycloak-resolver / subagents plugins
   "document-converter", // server
