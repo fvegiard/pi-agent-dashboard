@@ -143,7 +143,13 @@ export class ChildTunnelRuntime {
     const killed: number[] = [];
     let output = "";
     try {
-      output = execSync("ps -ax -o pid=,args=", { encoding: "utf-8", timeout: 5_000 }).toString();
+      // stderr ignored: on Windows cmd.exe prints "'ps' is not recognized"
+      // into the inherited server.log; the throw below already covers it.
+      output = execSync("ps -ax -o pid=,args=", {
+        encoding: "utf-8",
+        timeout: 5_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).toString();
     } catch {
       return killed;
     }

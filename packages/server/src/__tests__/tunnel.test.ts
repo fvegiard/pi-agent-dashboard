@@ -283,6 +283,13 @@ describe("scavengeOrphanZrokProcesses", () => {
     expect(scavengeOrphanZrokProcesses(8000)).toEqual([]);
   });
 
+  it("does not inherit the shell's stderr (Windows: no \"'ps' is not recognized\" in server.log)", () => {
+    vi.mocked(childProcess.execSync).mockReturnValue(Buffer.from(""));
+    scavengeOrphanZrokProcesses(8000);
+    const opts = vi.mocked(childProcess.execSync).mock.calls[0][1] as { stdio?: unknown };
+    expect(opts.stdio).toEqual(["ignore", "pipe", "ignore"]);
+  });
+
   it("should skip self (current process PID)", () => {
     vi.mocked(childProcess.execSync).mockReturnValue(
       Buffer.from(`${process.pid} zrok share reserved zzz --override-endpoint http://localhost:8000`),
