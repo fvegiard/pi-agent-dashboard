@@ -126,9 +126,12 @@ describe("piDashboard.bundledPlugins completeness", () => {
     expect(bundled).toContain("kb-plugin");
   });
 
-  it("installs Gmail's production dependencies from its workspace manifest", () => {
+  it("installs Gmail's external dependencies without a duplicate plugin workspace", () => {
     expect(readPkg("gmail-plugin").dependencies).toHaveProperty("oauth4webapi");
-    expect(readBundledWorkspacePkgs()).toContain("gmail-plugin");
+    expect(readBundledWorkspacePkgs()).not.toContain("gmail-plugin");
+    const src = fs.readFileSync(BUNDLE_SCRIPT, "utf8");
+    expect(src).toContain('path.join(PROJECT_DIR, "packages", "gmail-plugin", "package.json")');
+    expect(src).toContain("dependencies: gmailRuntimeDependencies");
   });
 
   it("excludes fixture-only plugins (e.g. demo-plugin)", () => {

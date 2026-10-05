@@ -116,7 +116,6 @@ const BUNDLED_WORKSPACE_PKGS = [
   "extension",
   "dashboard-plugin-runtime",
   "mcp-client-plugin",
-  "gmail-plugin", // oauth4webapi needed by the bundled Gmail server entry
   "bus-client", // extension
   "client-utils", // automation / flows / keycloak-resolver / subagents plugins
   "document-converter", // server
@@ -219,10 +218,19 @@ if (clientSrc) {
 // upgrade path is removed in Phase 3; the bundle is now the single source
 // of truth for pi/openspec/tsx versions, refreshed via electron-updater
 // whole-.app replacement.
+// Install Gmail's external dependencies without a second plugin workspace:
+// duplicate bridge entries under packages/ and resources/plugins/ conflict.
+const gmailPkg = JSON.parse(
+  readFileSync(path.join(PROJECT_DIR, "packages", "gmail-plugin", "package.json"), "utf8"),
+);
+const gmailRuntimeDependencies = Object.fromEntries(
+  Object.entries(gmailPkg.dependencies).filter(([name]) => !name.startsWith("@blackbelt-technology/")),
+);
 const bundlePkg = {
   name: "pi-dashboard-bundled-server",
   private: true,
   workspaces: BUNDLED_WORKSPACE_PKGS.map((p) => `packages/${p}`),
+  dependencies: gmailRuntimeDependencies,
 };
 writeFileSync(
   path.join(SERVER_BUNDLE, "package.json"),
