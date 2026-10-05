@@ -5,8 +5,11 @@
  */
 
 import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { rootGlobalOr } from "@blackbelt-technology/pi-dashboard-shared/platform/npm.js";
 import {
   type DashboardConfig,
   DEFAULT_SERVER_HEAP,
@@ -45,28 +48,107 @@ export interface LaunchResult {
   logOwned?: boolean;
 }
 
+const SERVER_PKG_SEGMENTS = ["@blackbelt-technology", "pi-dashboard-server", "src", "cli.ts"] as const;
+
+export interface ServerCli {
+  cliPath: string;
+  /** Node binary that must run this server (desktop install ships its own). */
+  nodeBin?: string;
+  source: "package" | "monorepo" | "npm-global" | "electron";
+}
+
+export interface FindServerCliDeps {
+  /** Directory of this module (default: `packages/extension/src`). */
+  moduleDir?: string;
+  /** Resolve `pi-dashboard-server/package.json`; null when not resolvable. */
+  resolvePackage?: () => string | null;
+  /** `npm root -g`; "" when npm is unavailable. */
+  npmRootGlobal?: () => string;
+  exists?: (p: string) => boolean;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  homedir?: string;
+}
+
+/** Default `resources` dirs of the PI Dashboard desktop app (electron-builder). */
+function electronResourceDirs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, home: string): string[] {
+  if (platform === "win32") {
+    const local = env["LOCALAPPDATA"] ?? path.join(home, "AppData", "Local");
+    return [path.join(local, "Programs", "pi-dashboard", "resources")];
+  }
+  if (platform === "darwin") {
+    return ["/Applications", path.join(home, "Applications")]
+      .map((d) => path.join(d, "PI Dashboard.app", "Contents", "Resources"));
+  }
+  return [path.join("/opt", "PI Dashboard", "resources")];
+}
+
 /**
- * Resolve the dashboard server CLI script path.
+ * Locate an installed dashboard server CLI. Returns the first candidate that
+ * exists on disk, or null:
+ *   1. `pi-dashboard-server` resolvable from the extension (umbrella / npm -g pi-dashboard)
+ *   2. Monorepo dev: `<repo>/packages/server/src/cli.ts`
+ *   3. Global npm: `<npm root -g>/@blackbelt-technology/pi-dashboard-server/src/cli.ts`
+ *   4. PI Dashboard desktop app: `<resources>/server/node_modules/…`, run with
+ *      its bundled `<resources>/node` (native deps are built for that Node).
  *
- * Handles two layouts:
- *   1. Monorepo dev: `<repo>/packages/extension/src/` → `<repo>/packages/server/src/cli.ts`
- *   2. Installed  : `<x>/node_modules/@blackbelt-technology/pi-dashboard-extension/src/`
- *                → `<x>/node_modules/@blackbelt-technology/pi-dashboard-server/src/cli.ts`
- *
- * Uses Node's module resolver (`require.resolve`) to find the server package
- * and joins `src/cli.ts`. Falls back to the monorepo-relative path so existing
- * dev workflows keep working even if the server package isn't resolvable (e.g.
- * a pristine checkout with no node_modules yet).
+ * A bridge installed standalone by pi (`npm:@…/pi-dashboard-extension`) has
+ * no server dependency; sibling-path math there yields the nonexistent
+ * `@blackbelt-technology/server/src/cli.ts`, so every candidate is
+ * existence-checked.
+ */
+export function findServerCli(deps: FindServerCliDeps = {}): ServerCli | null {
+  const exists = deps.exists ?? existsSync;
+  const platform = deps.platform ?? process.platform;
+  const env = deps.env ?? process.env;
+  const home = deps.homedir ?? os.homedir();
+  const resolvePackage = deps.resolvePackage ?? (() => {
+    try { return require.resolve("@blackbelt-technology/pi-dashboard-server/package.json"); } catch { return null; }
+  });
+
+  const pkgJson = resolvePackage();
+  if (pkgJson) {
+    const cliPath = path.resolve(path.dirname(pkgJson), "src", "cli.ts");
+    if (exists(cliPath)) return { cliPath, source: "package" };
+  }
+
+  const moduleDir = deps.moduleDir ?? __dirname;
+  if (path.basename(path.resolve(moduleDir, "..", "..")) === "packages") {
+    const cliPath = path.resolve(moduleDir, "..", "..", "server", "src", "cli.ts");
+    if (exists(cliPath)) return { cliPath, source: "monorepo" };
+  }
+
+  const npmRoot = (deps.npmRootGlobal ?? (() => rootGlobalOr("")))();
+  if (npmRoot) {
+    const cliPath = path.join(npmRoot, ...SERVER_PKG_SEGMENTS);
+    if (exists(cliPath)) return { cliPath, source: "npm-global" };
+  }
+
+  for (const resources of electronResourceDirs(platform, env, home)) {
+    const cliPath = path.join(resources, "server", "node_modules", ...SERVER_PKG_SEGMENTS);
+    if (!exists(cliPath)) continue;
+    const nodeBin = platform === "win32"
+      ? path.join(resources, "node", "node.exe")
+      : path.join(resources, "node", "bin", "node");
+    return exists(nodeBin) ? { cliPath, nodeBin, source: "electron" } : { cliPath, source: "electron" };
+  }
+
+  return null;
+}
+
+/**
+ * Resolve the dashboard server CLI script path (see `findServerCli`). When no
+ * install is found, returns the monorepo-relative path — used only as a
+ * stable identity (worktree guard, lock key); `launchServer` never spawns it.
  */
 export function resolveServerCliPath(): string {
-  try {
-    const serverPkgJson = require.resolve("@blackbelt-technology/pi-dashboard-server/package.json");
-    return path.resolve(path.dirname(serverPkgJson), "src", "cli.ts");
-  } catch {
-    // Dev-repo fallback: <extension>/src/../../server/src/cli.ts
-    return path.resolve(__dirname, "..", "..", "server", "src", "cli.ts");
-  }
+  return findServerCli()?.cliPath ?? path.resolve(__dirname, "..", "..", "server", "src", "cli.ts");
 }
+
+export const SERVER_NOT_FOUND_MESSAGE =
+  "Dashboard server not found: the bridge extension is installed without " +
+  "@blackbelt-technology/pi-dashboard-server. Start the PI Dashboard app, or " +
+  "install the server (npm i -g @blackbelt-technology/pi-dashboard-server).";
 
 /**
  * Default V8 old-space ceiling (MB) for the dashboard server.
@@ -146,13 +228,20 @@ export function buildSpawnArgs(config: DashboardConfig): string[] {
  * See change: fix-bridge-server-start-diagnostics,
  * add-configurable-readiness-timeout.
  */
-export async function launchServer(config: DashboardConfig): Promise<LaunchResult> {
-  const cliPath = resolveServerCliPath();
+export async function launchServer(
+  config: DashboardConfig,
+  deps: { findCli?: () => ServerCli | null } = {},
+): Promise<LaunchResult> {
+  const server = (deps.findCli ?? findServerCli)();
+  if (!server) return { success: false, message: SERVER_NOT_FOUND_MESSAGE, logOwned: false };
   const args = buildSpawnArgs(config);
 
   try {
     const result = await launchDashboardServer({
-      cliPath,
+      cliPath: server.cliPath,
+      // Anchor jiti in the server's own tree; desktop installs run on their bundled Node.
+      anchor: server.cliPath,
+      nodeBin: server.nodeBin,
       extraArgs: args,
       // Narrow overrides only (heap stamp + starter + marker strip). The
       // heap stamp must still ride along: a bridge-auto-started server

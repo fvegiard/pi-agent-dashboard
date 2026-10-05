@@ -6,6 +6,8 @@ import {
   buildSpawnArgs,
   buildBridgeEnvOverrides,
   DEFAULT_SERVER_MAX_OLD_SPACE_MB,
+  findServerCli,
+  launchServer,
   resolveServerCliPath,
 } from "../server-launcher.js";
 
@@ -38,6 +40,61 @@ describe("server-launcher", () => {
       expect(cliPath).not.toMatch(/@blackbelt-technology[\\/]+server[\\/]+src[\\/]+cli\.ts$/);
       // And must land on pi-dashboard-server (installed) or packages/server (dev).
       expect(cliPath).toMatch(/(pi-dashboard-server|packages[\\/]+server)[\\/]+src[\\/]+cli\.ts$/);
+    });
+  });
+
+  // Regression: a bridge installed standalone by pi
+  // (`<agent>/npm/node_modules/@blackbelt-technology/pi-dashboard-extension`)
+  // has no pi-dashboard-server dep. The old fallback did sibling-path math
+  // and spawned `<scope>/server/src/cli.ts`, which never exists
+  // ("Cannot find module …/@blackbelt-technology/server/src/cli.ts").
+  describe("findServerCli (standalone bridge install)", () => {
+    const extDir = path.join("C:", "u", ".omo", "agent", "npm", "node_modules", "@blackbelt-technology", "pi-dashboard-extension", "src");
+    const bogus = path.join("C:", "u", ".omo", "agent", "npm", "node_modules", "@blackbelt-technology", "server", "src", "cli.ts");
+    const base = {
+      moduleDir: extDir,
+      resolvePackage: () => null,
+      npmRootGlobal: () => "",
+      platform: "win32" as NodeJS.Platform,
+      env: { LOCALAPPDATA: path.join("C:", "u", "AppData", "Local") },
+    };
+
+    it("returns null (never the bogus sibling path) when no server is installed", () => {
+      const seen: string[] = [];
+      const found = findServerCli({ ...base, exists: (p) => { seen.push(p); return false; } });
+      expect(found).toBeNull();
+      expect(seen).not.toContain(bogus);
+    });
+
+    it("finds a global npm install of pi-dashboard-server", () => {
+      const root = path.join("C:", "u", "AppData", "Roaming", "npm", "node_modules");
+      const cli = path.join(root, "@blackbelt-technology", "pi-dashboard-server", "src", "cli.ts");
+      const found = findServerCli({ ...base, npmRootGlobal: () => root, exists: (p) => p === cli });
+      expect(found).toEqual({ cliPath: cli, source: "npm-global" });
+    });
+
+    it("finds the PI Dashboard desktop install and pairs it with its bundled node", () => {
+      const resources = path.join("C:", "u", "AppData", "Local", "Programs", "pi-dashboard", "resources");
+      const cli = path.join(resources, "server", "node_modules", "@blackbelt-technology", "pi-dashboard-server", "src", "cli.ts");
+      const node = path.join(resources, "node", "node.exe");
+      const found = findServerCli({ ...base, exists: (p) => p === cli || p === node });
+      expect(found).toEqual({ cliPath: cli, nodeBin: node, source: "electron" });
+    });
+
+    it("prefers the resolvable package over other installs", () => {
+      const pkg = path.join("C:", "x", "node_modules", "@blackbelt-technology", "pi-dashboard-server", "package.json");
+      const cli = path.join(path.dirname(pkg), "src", "cli.ts");
+      const found = findServerCli({ ...base, resolvePackage: () => pkg, exists: () => true });
+      expect(found).toEqual({ cliPath: cli, source: "package" });
+    });
+  });
+
+  describe("launchServer without an installed server", () => {
+    it("fails with an actionable message instead of spawning a missing file", async () => {
+      const result = await launchServer({ port: 8000, piPort: 9999 } as any, { findCli: () => null });
+      expect(result.success).toBe(false);
+      expect(result.logOwned).toBe(false);
+      expect(result.message).toMatch(/pi-dashboard-server/);
     });
   });
 
